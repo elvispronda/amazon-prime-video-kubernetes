@@ -1,69 +1,103 @@
-pipeline{
-    agent any     
+pipeline {
+    agent any
     stages {
-        stage('clean workspace'){
-            steps{
+        stage('clean workspace') {
+            steps {
                 cleanWs()
             }
         }
-        stage('Checkout from Git'){
-            steps{
+        stage('Checkout from Git') {
+            steps {
                 git branch: 'main', url: 'https://github.com/elvispronda/amazon-prime-video-kubernetes.git'
             }
-        }        
-        stage('Deploy to EKS Cluster') {
+        }
+        // MODIFIED STAGE STARTS HERE
+        stage('Deploy and Verify EKS Application') {
             steps {
                 dir('kubernetes') {
-                script {
-                    sh '''
-                    echo "Verifying AWS credentials..."
-                    aws sts get-caller-identity
+                    script {
+                        echo "Verifying AWS credentials..."
+                        sh 'aws sts get-caller-identity'
 
-                    echo "Configuring kubectl for EKS cluster..."
-                    aws eks update-kubeconfig --region us-east-1 --name Awsdevops
+                        echo "Configuring kubectl for EKS cluster..."
+                        sh 'aws eks update-kubeconfig --region us-east-1 --name Awsdevops'
 
-                    echo "Verifying kubeconfig..."
-                    kubectl config view
+                        echo "Deploying application to EKS..."
+                        sh 'kubectl apply -f manifest.yml'
 
-                    echo "Deploying application to EKS..."
-                    kubectl apply -f manifest.yml
-                    
-                    echo "Verifying deployment..."
-                    kubectl get pods
-                    kubectl get svc
-                    '''
+                        // --- START: NEW LOGIC TO WAIT FOR LOAD BALANCER ---
+                        echo "Waiting for Load Balancer to get an external IP..."
+                        // This loop will try for 5 minutes (30 attempts * 10 seconds)
+                        for (int i = 0; i < 30; i++) {
+                            // Use jsonpath to get the hostname of the load balancer. It will be empty until ready.
+                            def lb_hostname = sh(
+                                script: "kubectl get service amazon-prime-video-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                                returnStdout: true
+                            ).trim()
+
+                            if (lb_hostname) {
+                                echo "Load Balancer is ready!"
+                                echo "Access the application at: http://${lb_hostname}"
+                                // Save the URL to an environment variable to use in the email later
+                                env.LOAD_BALANCER_URL = "http://${lb_hostname}"
+                                break // Exit the loop since we have the URL
+                            }
+
+                            if (i == 29) {
+                                // If the loop finishes without finding the URL, fail the pipeline
+                                error("Timeout: Load Balancer IP was not assigned after 5 minutes.")
+                            }
+
+                            echo "Still waiting for Load Balancer IP... (Attempt ${i+1}/30)"
+                            sleep(10) // Wait 10 seconds before trying again
+                        }
+                        // --- END: NEW LOGIC TO WAIT FOR LOAD BALANCER ---
+
+                        // --- START: NEW LOGIC TO WAIT FOR PODS ---
+                        echo "Verifying that application pods are running and ready..."
+                        // This command waits until pods with the label 'app=amazon-prime-video' are in the 'Ready' state.
+                        // It will fail if they don't become ready within 5 minutes.
+                        sh 'kubectl wait --for=condition=ready pod -l app=amazon-prime-video --timeout=5m'
+
+                        echo "Deployment and services are fully up!"
+                        sh 'kubectl get pods -l app=amazon-prime-video'
+                        sh 'kubectl get svc amazon-prime-video-service'
+                    }
                 }
             }
-         }
-    
-       }
-
+        }
     }
     post {
-    always {
-        script {
-            def buildStatus = currentBuild.currentResult
-            def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'Github User'
-            
-            emailext (
-                subject: "Pipeline ${buildStatus}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: """
-                    <p>This is a Jenkins amazon-prime-video CICD pipeline status.</p>
-                    <p>Project: ${env.JOB_NAME}</p>
-                    <p>Build Number: ${env.BUILD_NUMBER}</p>
-                    <p>Build Status: ${buildStatus}</p>
-                    <p>Started by: ${buildUser}</p>
-                    <p>Build URL: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
-                """,
-                to: 'elvisndayishimiye200@gmail.com',
-                from: 'elvisndayishimiye200@gmail.com',
-                replyTo: 'elvisndayishimiye200@gmail.com',
-                mimeType: 'text/html',
-                attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
-            )
-           }
-       }
+        always {
+            script {
+                def buildStatus = currentBuild.currentResult
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'Github User'
+                
+                // Add the application URL to the email body if it exists
+                def applicationLink = env.LOAD_BALANCER_URL ? """
+                    <p><b>✅ Application URL:</b> <a href='${env.LOAD_BALANCER_URL}'>${env.LOAD_BALANCER_URL}</a></p>
+                """ : """
+                    <p><b>❌ Application URL:</b> Not available. Deployment may have failed.</p>
+                """
 
+                emailext (
+                    subject: "Pipeline ${buildStatus}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    body: """
+                        <p>This is a Jenkins amazon-prime-video CICD pipeline status.</p>
+                        <p><b>Project:</b> ${env.JOB_NAME}</p>
+                        <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
+                        <p><b>Build Status:</b> ${buildStatus}</p>
+                        <p><b>Started by:</b> ${buildUser}</p>
+                        <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                        ${applicationLink}
+                    """,
+                    to: 'elvisndayishimiye200@gmail.com',
+                    from: 'elvisndayishimiye200@gmail.com',
+                    replyTo: 'elvisndayishimiye200@gmail.com',
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+                )
+            }
+        }
     }
-
 }

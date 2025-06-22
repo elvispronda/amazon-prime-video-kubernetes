@@ -1,0 +1,114 @@
+progress note
+
+Soanrqube
+
+1. Sonarqube token - xxxxxxxxxxxxxxxxxxxxx
+
+2. Sonarqube Webhoook - jenkins	http://13.216.214.1:8080/sonarqube-webhook/
+
+3. GMAIL passtoken - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+4. 
+AdministratorAccess
+AmazonEC2FullAccess
+AmazonVPCFullAccess
+AWSCloudFormationFullAccess
+IAMFullAccess
+AmazonEKSClusterPolicy and 
+AmazonEKSServicePolicy for managing EKS clusters.
+
+
+
+Kubernetes deployment 
+  Benefits of Each Command in Creating an Amazon EKS Cluster
+
+
+Overall Benefits of This Setup
+✅ High Availability – The cluster is deployed across multiple Availability Zones.
+✅ Security Best Practices – IAM OIDC integration ensures Pods get only the required permissions.
+✅ Scalability & Cost Optimization – Auto-scaling adjusts worker nodes dynamically.
+✅ AWS Integration – Seamless integration with AWS services like ALB, ECR, Auto Scaling, and App Mesh.
+✅ Ease of Management – Using eksctl simplifies EKS cluster and node group creation.
+
+
+(a) Creating the EKS Cluster
+
+eksctl create cluster --name=Cloudaseem \
+                      --region=ap-south-1 \
+                      --zones=ap-south-1a,ap-south-1b \
+                      --version=1.30 \
+                      --without-nodegroup
+Benefits:
+
+Creates an EKS Cluster – This command provisions an Amazon EKS cluster without any worker nodes.
+
+Multi-AZ Deployment – The --zones flag ensures high availability by distributing the cluster across multiple Availability Zones (ap-south-1a, ap-south-1b).
+
+Version Control – Setting --version=1.30 ensures you are using a specific Kubernetes version for compatibility and stability.
+
+Without Nodegroup – This allows fine-grained control over node provisioning, letting you add worker nodes separately.
+
+EKS Console Verification – Once created, you can check the cluster in the AWS EKS console.
+
+(b) Associating IAM OIDC Provider
+
+eksctl utils associate-iam-oidc-provider \
+    --region ap-south-1 \
+    --cluster Cloudaseem \
+    --approve
+Benefits:
+
+Secure IAM Role Access for Pods – Enables IRSA (IAM Roles for Service Accounts), allowing Kubernetes Pods to assume IAM roles securely.
+
+Prevents Over-Permission Issues – Without this, all Pods would need to rely on the IAM role assigned to the EC2 worker nodes, leading to excessive permissions.
+
+Required for AWS Service Integrations – Many AWS services like Load Balancers, External DNS, and Auto Scaling require IAM roles for granular access.
+
+OIDC Authentication – Amazon EKS supports OpenID Connect (OIDC) authentication, allowing service accounts to securely access AWS resources.
+
+(c) Creating the Node Group
+
+eksctl create nodegroup --cluster=Cloudaseem \
+                       --region=ap-south-1 \
+                       --name=node2 \
+                       --node-type=t3.medium \
+                       --nodes=2 \
+                       --nodes-min=2 \
+                       --nodes-max=4 \
+                       --node-volume-size=20 \
+                       --ssh-access \
+                       --ssh-public-key=cloudaseem \
+                       --managed \
+                       --asg-access \
+                       --external-dns-access \
+                       --full-ecr-access \
+                       --appmesh-access \
+                       --alb-ingress-access
+Benefits:
+
+Adds Managed Worker Nodes – This creates a managed node group, reducing maintenance overhead.
+
+Optimized Resource Scaling –
+
+--nodes=3 ensures three initial worker nodes.
+
+--nodes-min=2 and --nodes-max=4 allow auto-scaling based on demand.
+
+Right-Sized Compute Power – --node-type=t3.medium balances cost and performance.
+
+Persistent Storage – --node-volume-size=20 ensures 20GB of storage per node.
+
+Secure SSH Access – --ssh-access --ssh-public-key=Cloudaseem allows secure SSH access using the specified public key.
+
+AWS Service Integrations – The following flags enable integrations with AWS services:
+
+--asg-access → Allows Amazon Auto Scaling.
+
+--external-dns-access → Grants permissions for managing DNS records.
+
+--full-ecr-access → Provides full access to Amazon ECR for pulling container images.
+
+--appmesh-access → Enables Amazon App Mesh for microservice networking.
+
+--alb-ingress-access → Allows Kubernetes Ingress Controller to manage AWS ALB (Application Load Balancer).
+
